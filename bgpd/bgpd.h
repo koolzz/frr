@@ -2550,6 +2550,8 @@ extern void bgp_option_norib_unset_runtime(void);
 extern int bgp_get(struct bgp **bgp, as_t *as, const char *name,
 		   enum bgp_instance_type kind, const char *as_pretty,
 		   enum asnotation_mode asnotation);
+extern int bgp_vrf_disable(struct vrf *vrf);
+extern void bgp_vrf_reconcile(struct bgp *bgp, struct vrf *vrf);
 extern void bgp_instance_up(struct bgp *);
 extern void bgp_instance_down(struct bgp *);
 extern int bgp_delete(struct bgp *);

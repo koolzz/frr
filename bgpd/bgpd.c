@@ -84,6 +84,8 @@ DEFINE_MTYPE_STATIC(BGPD, PEER_TX_SHUTDOWN_MSG, "Peer shutdown message (TX)");
 DEFINE_QOBJ_TYPE(bgp_master);
 DEFINE_QOBJ_TYPE(bgp);
 DEFINE_QOBJ_TYPE(peer);
+DEFINE_HOOK(bgp_hook_vrf_update, (struct vrf *vrf, bool enabled),
+	    (vrf, enabled));
 DEFINE_HOOK(bgp_inst_delete, (struct bgp *bgp), (bgp));
 DEFINE_HOOK(bgp_instance_state, (struct bgp *bgp), (bgp));
 DEFINE_HOOK(bgp_routerid_update, (struct bgp *bgp, bool withdraw), (bgp, withdraw));
@@ -3830,6 +3832,76 @@ int bgp_handle_socket(struct bgp *bgp, struct vrf *vrf, vrf_id_t old_vrf_id,
 	} else
 		return bgp_check_main_socket(create, bgp);
 }
+
+/* Activate a configured instance when its kernel VRF is already available.
+ * An automatic import-vrf instance can miss the enable event while hidden;
+ * promotion to an explicit instance must reconcile that missed transition.
+ */
+void bgp_vrf_reconcile(struct bgp *bgp, struct vrf *vrf)
+{
+	vrf_id_t old_vrf_id;
+
+	if (!bgp || !vrf || !vrf_is_enabled(vrf) ||
+	    vrf->vrf_id == VRF_UNKNOWN || bgp->vrf_id == vrf->vrf_id)
+		return;
+
+	old_vrf_id = bgp->vrf_id;
+	/* We have instance configured, link to VRF and make it "up". */
+	bgp_vrf_link(bgp, vrf);
+
+	bgp_handle_socket(bgp, vrf, old_vrf_id, true);
+	bgp_instance_up(bgp);
+	hook_call(bgp_hook_vrf_update, vrf, true);
+	vpn_leak_zebra_vrf_label_update(bgp, AFI_IP);
+	vpn_leak_zebra_vrf_label_update(bgp, AFI_IP6);
+	vpn_leak_zebra_vrf_sid_update(bgp, AFI_IP);
+	vpn_leak_zebra_vrf_sid_update(bgp, AFI_IP6);
+	vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
+			    bgp_get_default(), bgp);
+	vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
+			    bgp_get_default(), bgp);
+	vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
+			    bgp_get_default(), bgp);
+	vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
+			    bgp_get_default(), bgp);
+}
+
+int bgp_vrf_disable(struct vrf *vrf)
+{
+	struct bgp *bgp;
+
+	if (vrf->vrf_id == VRF_DEFAULT)
+		return 0;
+
+	if (BGP_DEBUG(zebra, ZEBRA))
+		zlog_debug("VRF disable %s id %d", vrf->name, vrf->vrf_id);
+
+	bgp = bgp_lookup_by_name_filter(vrf->name, false);
+	if (bgp) {
+
+		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP);
+		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP6);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
+				   bgp_get_default(), bgp);
+		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
+				   bgp_get_default(), bgp);
+
+		bgp_handle_socket(bgp, vrf, VRF_UNKNOWN, false);
+		/* We have instance configured, unlink from VRF and make it
+		 * "down". */
+		bgp_instance_down(bgp);
+		bgp_vrf_unlink(bgp, vrf);
+		hook_call(bgp_hook_vrf_update, vrf, false);
+	}
+
+	/* Note: This is a callback, the VRF will be deleted by the caller. */
+	return 0;
+}
+
 
 int bgp_lookup_by_as_name_type(struct bgp **bgp_val, as_t *as, const char *as_pretty,
 			       enum asnotation_mode asnotation, const char *name,

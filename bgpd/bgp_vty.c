@@ -1638,6 +1638,8 @@ DEFUN_NOSH (router_bgp,
 
 	/* unset the auto created flag as the user config is now present */
 	UNSET_FLAG(bgp->vrf_flags, BGP_VRF_AUTO);
+	if (bgp->inst_type == BGP_INSTANCE_TYPE_VRF)
+		bgp_vrf_reconcile(bgp, bgp_vrf_lookup_by_instance_type(bgp));
 	VTY_PUSH_CONTEXT(BGP_NODE, bgp);
 
 	return CMD_SUCCESS;

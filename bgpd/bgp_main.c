@@ -59,9 +59,6 @@ DEFINE_HOOK(bgp_hook_config_write_vrf, (struct vty *vty, struct vrf *vrf),
 #include "bgpd/rfapi/rfapi_backend.h"
 #endif
 
-DEFINE_HOOK(bgp_hook_vrf_update, (struct vrf *vrf, bool enabled),
-	    (vrf, enabled));
-
 /* bgpd options, we use GNU getopt library. */
 static const struct option longopts[] = { { "bgp_port", required_argument, NULL, 'p' },
 					  { "listenon", required_argument, NULL, 'l' },
@@ -293,73 +290,13 @@ static int bgp_vrf_delete(struct vrf *vrf)
 
 static int bgp_vrf_enable(struct vrf *vrf)
 {
-	struct bgp *bgp;
-	vrf_id_t old_vrf_id;
-
 	if (BGP_DEBUG(zebra, ZEBRA))
 		zlog_debug("VRF enable add %s id %u", vrf->name, vrf->vrf_id);
 
-	bgp = bgp_lookup_by_name(vrf->name);
-	if (bgp && bgp->vrf_id != vrf->vrf_id) {
-		old_vrf_id = bgp->vrf_id;
-		/* We have instance configured, link to VRF and make it "up". */
-		bgp_vrf_link(bgp, vrf);
-
-		bgp_handle_socket(bgp, vrf, old_vrf_id, true);
-		bgp_instance_up(bgp);
-		hook_call(bgp_hook_vrf_update, vrf, true);
-		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP);
-		vpn_leak_zebra_vrf_label_update(bgp, AFI_IP6);
-		vpn_leak_zebra_vrf_sid_update(bgp, AFI_IP);
-		vpn_leak_zebra_vrf_sid_update(bgp, AFI_IP6);
-		vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
-				    bgp_get_default(), bgp);
-		vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
-				    bgp_get_default(), bgp);
-		vpn_leak_postchange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
-				    bgp_get_default(), bgp);
-		vpn_leak_postchange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
-				    bgp_get_default(), bgp);
-	}
-
+	bgp_vrf_reconcile(bgp_lookup_by_name(vrf->name), vrf);
 	return 0;
 }
 
-static int bgp_vrf_disable(struct vrf *vrf)
-{
-	struct bgp *bgp;
-
-	if (vrf->vrf_id == VRF_DEFAULT)
-		return 0;
-
-	if (BGP_DEBUG(zebra, ZEBRA))
-		zlog_debug("VRF disable %s id %d", vrf->name, vrf->vrf_id);
-
-	bgp = bgp_lookup_by_name_filter(vrf->name, false);
-	if (bgp) {
-
-		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP);
-		vpn_leak_zebra_vrf_label_withdraw(bgp, AFI_IP6);
-		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP,
-				   bgp_get_default(), bgp);
-		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP,
-				   bgp_get_default(), bgp);
-		vpn_leak_prechange(BGP_VPN_POLICY_DIR_TOVPN, AFI_IP6,
-				   bgp_get_default(), bgp);
-		vpn_leak_prechange(BGP_VPN_POLICY_DIR_FROMVPN, AFI_IP6,
-				   bgp_get_default(), bgp);
-
-		bgp_handle_socket(bgp, vrf, VRF_UNKNOWN, false);
-		/* We have instance configured, unlink from VRF and make it
-		 * "down". */
-		bgp_instance_down(bgp);
-		bgp_vrf_unlink(bgp, vrf);
-		hook_call(bgp_hook_vrf_update, vrf, false);
-	}
-
-	/* Note: This is a callback, the VRF will be deleted by the caller. */
-	return 0;
-}
 
 static int bgp_vrf_config_write(struct vty *vty)
 {
